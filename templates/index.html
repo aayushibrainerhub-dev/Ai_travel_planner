@@ -168,7 +168,14 @@
         chatMessages.removeChild(loadingMessage);
 
         const parsedMarkdown = marked.parse(data.itinerary || 'No itinerary generated.');
-        appendMessage('assistant', `<div class="llm-content">${parsedMarkdown}</div>`);
+        appendMessage('assistant', `
+          <div class="llm-content">
+            ${parsedMarkdown}
+            ${renderFlightDetails(data.flights || [])}
+            ${renderHotelPricing(data.hotels || [])}
+            ${renderDiningDetails(data.restaurants || [])}
+          </div>
+        `);
 
       } catch (err) {
         chatMessages.removeChild(loadingMessage);
@@ -185,6 +192,60 @@
       const div = document.createElement('div');
       div.innerText = text;
       return div.innerHTML;
+    }
+
+    function formatPrice(amount, currency) {
+      if (typeof amount !== 'number') return 'Price unavailable';
+      return `${escapeHtml(currency || '')} ${amount.toLocaleString(undefined, {
+        minimumFractionDigits: Number.isInteger(amount) ? 0 : 2,
+        maximumFractionDigits: 2,
+      })}`.trim();
+    }
+
+    function renderHotelPricing(hotels) {
+      const pricedHotels = hotels.slice(0, 4).filter(hotel =>
+        typeof hotel.price_per_night === 'number' || typeof hotel.total_stay_price === 'number'
+      );
+      if (!pricedHotels.length) return '';
+
+      const cards = pricedHotels.map(hotel => {
+        const nightly = formatPrice(hotel.price_per_night, hotel.currency);
+        return `
+          <div class="hotel-price-card">
+            <strong>${escapeHtml(hotel.name || 'Hotel')}</strong>
+            <div>Per night: <b>${nightly}</b></div>
+          </div>
+        `;
+      }).join('');
+
+      return `<section class="hotel-pricing"><h3>🏨 Hotel pricing</h3>${cards}</section>`;
+    }
+
+    function renderFlightDetails(flights) {
+      if (!flights.length) return '';
+      const cards = flights.map(flight => `
+        <div class="hotel-price-card">
+          <strong>✈️ ${escapeHtml(flight.airline || 'Flight option')}</strong>
+          <div>Outbound: ${escapeHtml(flight.departure || 'Schedule unavailable')} → ${escapeHtml(flight.arrival || 'Schedule unavailable')}</div>
+          <div>Return: ${escapeHtml(flight.return_departure || 'Schedule unavailable')} → ${escapeHtml(flight.return_arrival || 'Schedule unavailable')}</div>
+          <div>Price: <b>${formatPrice(flight.price, flight.currency)}</b></div>
+          <small>Source: ${escapeHtml(flight.price_source || flight.source || 'provider')} · verify before booking</small>
+        </div>
+      `).join('');
+      return `<section class="hotel-pricing"><h3>✈️ Flight options</h3>${cards}</section>`;
+    }
+
+    function renderDiningDetails(restaurants) {
+      if (!restaurants || !restaurants.length) return '';
+      const cards = restaurants.slice(0, 4).map(rest => `
+        <div class="hotel-price-card">
+          <strong>🍽️ ${escapeHtml(rest.name || 'Dining venue')}</strong>
+          <div>Cuisine: ${escapeHtml(rest.cuisine || 'Local Dining')} ${rest.rating ? ` · ⭐ ${rest.rating}` : ''}</div>
+          <div>Meal Budget: <b>${escapeHtml(rest.budget_per_meal || rest.price_range || 'Moderate')}</b></div>
+          <small>${escapeHtml(rest.address || 'Local area')}</small>
+        </div>
+      `).join('');
+      return `<section class="hotel-pricing"><h3>🍽️ Recommended Dining & Cafés</h3>${cards}</section>`;
     }
 
     chatForm.addEventListener('submit', (e) => {

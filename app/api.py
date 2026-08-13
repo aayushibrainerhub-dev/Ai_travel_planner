@@ -25,10 +25,18 @@ class TravelPreferences(BaseModel):
 class HotelOption(BaseModel):
     name: str
     price_per_night: Optional[float] = None
+    nights: Optional[int] = None
+    total_stay_price: Optional[float] = None
     rating: Optional[float] = None
     destination: Optional[str] = None
     address: Optional[str] = None
     source: Optional[str] = None
+    price_level: Optional[str] = None
+    price_range: Optional[str] = None
+    currency: Optional[str] = None
+    price_source: Optional[str] = None
+    price_basis: Optional[str] = None
+    web_details: List[dict[str, str]] = []
 
 
 class FlightOption(BaseModel):
@@ -42,6 +50,9 @@ class FlightOption(BaseModel):
     destination: Optional[str] = None
     origin: Optional[str] = None
     source: Optional[str] = None
+    currency: Optional[str] = None
+    price_source: Optional[str] = None
+    web_details: List[dict[str, str]] = []
 
 
 class RestaurantOption(BaseModel):
@@ -49,6 +60,12 @@ class RestaurantOption(BaseModel):
     cuisine: Optional[str] = None
     rating: Optional[float] = None
     address: Optional[str] = None
+    price_level: Optional[str] = None
+    price_range: Optional[str] = None
+    estimated_price: Optional[float] = None
+    currency: Optional[str] = None
+    price_source: Optional[str] = None
+    web_details: List[dict[str, str]] = []
 
 
 class TravelResponse(BaseModel):
@@ -225,5 +242,3 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
-
-

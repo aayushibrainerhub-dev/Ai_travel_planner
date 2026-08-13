@@ -565,6 +565,29 @@ body::after {
   color: #7DD3FC;
 }
 
+.hotel-pricing {
+  margin-top: 1.25rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.hotel-price-card {
+  margin-top: 0.65rem;
+  padding: 0.8rem;
+  border: 1px solid rgba(129, 140, 248, 0.35);
+  border-radius: 10px;
+  background: rgba(99, 102, 241, 0.1);
+  line-height: 1.65;
+}
+
+.hotel-price-card strong {
+  display: block;
+}
+
+.hotel-price-card small {
+  color: #CBD5E1;
+}
+
 @media (max-width: 768px) {
   .chat-app-container {
     width: 100%;

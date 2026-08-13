@@ -14,6 +14,7 @@ in TravelState so the REST API can return them as typed fields.
 """
 
 import json
+import time
 from typing import TypedDict
 
 from langgraph.graph import StateGraph, START, END
@@ -190,7 +191,7 @@ def agent_node(state: TravelState, runtime: dict | None = None) -> TravelState:
     for attempt in range(1, max_attempts + 1):
         try:
             agent_result = agent_graph.invoke({
-                "messages": agent_messages[-10:]  # Limit to last 10 messages to avoid exceeding Groq TPM limit
+                "messages": agent_messages[-3:]  # Keep prior long itinerary responses out of Groq's TPM budget
             })
             break
         except Exception as e:
@@ -292,4 +293,3 @@ def compile_graph():
     if redis_cache is None:
         return graph.compile()
     return graph.compile(cache=redis_cache)
-

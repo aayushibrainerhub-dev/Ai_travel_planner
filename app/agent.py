@@ -52,25 +52,27 @@ from app.tools.currency import convert_budget as _convert_budget
 # ---------------------------------------------------------------------------
 
 @tool
-def search_flights(origin: str, destination: str, start_date: str = "", currency: str = "USD") -> dict:
-    """Search for available flights from origin to destination city.
+def search_flights(origin: str, destination: str, start_date: str = "", end_date: str = "", currency: str = "USD") -> dict:
+    """Search for available round-trip flights from origin to destination city.
     Returns a list of flight options with airline, price, departure and arrival times in the requested currency."""
-    state = {"preferences": {"origin": origin, "destination": destination, "start_date": start_date, "currency": currency}}
+    state = {"preferences": {"origin": origin, "destination": destination, "start_date": start_date, "end_date": end_date, "currency": currency}}
     return _search_flights(state)
 
 
 @tool
-def search_hotels(destination: str, currency: str = "USD") -> dict:
+def search_hotels(destination: str, start_date: str = "", end_date: str = "", currency: str = "USD") -> dict:
     """Search for hotel accommodations in the given destination city.
-    Returns a list of hotels with name, price per night (in requested currency), and rating."""
-    state = {"preferences": {"destination": destination, "currency": currency}}
+    Include the trip start and end dates to calculate the number of nights and total hotel stay price.
+    Returns a list of hotels with per-night and total-stay prices when DDG provides an explicit price.
+    Do not treat a Places price range as a confirmed nightly room price."""
+    state = {"preferences": {"destination": destination, "start_date": start_date, "end_date": end_date, "currency": currency}}
     return _search_hotels(state)
 
 
 @tool
 def find_restaurants(destination: str) -> dict:
-    """Find restaurant and dining options in the given destination city.
-    Returns a list of restaurants with name, cuisine type, and rating."""
+    """Find named restaurants and cafés in the given destination city.
+    Returns venue names, cuisine/type, rating, address, and Google Places price range/level when available."""
     state = {"preferences": {"destination": destination}}
     return _find_restaurants(state)
 
@@ -135,7 +137,7 @@ CONVERSATIONAL STEP-BY-STEP FLOW RULES:
          - 🛬 **Return Flight**: [Selected Airline & details] | [Destination] → [Origin] on [End Date]
          - **Flight Cost Allocation**: **[Flight Cost]**
        - 🏨 **Hotel Cost**: Selected hotel + total stay cost for all nights (e.g. Hotels: 7,000 INR)
-       - 🍽️ **Restaurants / Food Cost**: Recommended dining spots + allocated food budget (e.g. Restaurants: 5,000 INR)
+       - 🍽️ **Restaurants / Food Cost**: List the returned named restaurant/café venues and their Google Places price ranges when available, plus allocated food budget (e.g. Restaurants: 5,000 INR)
        - 💰 **Total Package Cost**: Sum of flight, hotel, and food costs.
        - 📋 **Package Itinerary Highlights**: Day-by-day plan overview for this package.
 
@@ -200,6 +202,21 @@ CONVERSATIONAL STEP-BY-STEP FLOW RULES:
    - Do NOT re-run flight search tools for simple Q&A questions unless requested.
 """
 
+# Keep the instruction compact: Groq's TPM budget includes system prompt,
+# tool schemas, conversation context, and requested output tokens.
+SYSTEM_PROMPT = """You are a friendly travel planner. Always ask for missing origin, destination, dates, budget, preferred currency, and traveller count before generating a travel plan unless requested otherwise. If currency is INR (or requested otherwise), pass that currency to all tools and convert all flight and hotel figures into that requested currency.
+When ready, call search_flights, search_hotels, find_restaurants, get_weather,
+build_route, and convert_budget. Create exactly three concise Markdown packages:
+Saver, Comfort, and Premium. Each must show round-trip flight details returned by
+the flight tool, hotel nightly and total-stay costs in the requested currency, dining, and a package total.
+For every package, include an "Itinerary" section with Day 1 through the final
+trip day, stating a concrete activity/area and a dining or rest suggestion for
+each day. Keep each day to one short bullet and make packages meaningfully
+different (budget sights, balanced highlights, or premium experiences).
+Never invent airline, schedule, or price data missing from the tool response.
+Treat DDG-derived prices as estimates and say they must be verified before booking.
+For simple follow-up questions, answer directly without rerunning tools."""
+
 TRAVEL_TOOLS = [
     search_flights,
     search_hotels,
@@ -234,6 +251,9 @@ def build_travel_agent():
         api_key=api_key,
         base_url="https://api.groq.com/openai/v1",  # Groq API endpoint
         temperature=0.3,
+        # Groq counts requested output tokens toward its per-minute limit.
+        # A travel plan should fit comfortably within this cap.
+        max_tokens=1200,
         max_retries=5,
     )
 
