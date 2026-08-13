@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Travel Planner</title>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <!-- Markdown renderer for LLM itineraries -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+
+<body>
+  <div class="chat-app-container">
+
+    <!-- Header Bar -->
+    <header class="chat-header">
+      <div class="brand-section">
+        <div class="avatar-badge">
+          <i class="fa-solid fa-wand-magic-sparkles"></i>
+        </div>
+        <div class="brand-info">
+          <h1>AI Travel Assistant</h1>
+          <p><span class="status-dot"></span> Online & Ready to Plan</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="btn-new-chat" class="btn-header">
+          <i class="fa-solid fa-rotate"></i> New Chat
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Chat Messages Thread -->
+    <main id="chat-messages" class="chat-body">
+
+      <!-- Welcome Hero Screen -->
+      <div id="welcome-screen" class="welcome-screen">
+        <div class="welcome-badge">
+          <i class="fa-solid fa-compass"></i> AI Travel Planner
+        </div>
+        <h2>Where would you like to go?</h2>
+        <p>Type your travel plans naturally in the chat below, or select a sample itinerary prompt to begin.</p>
+
+        <div class="suggestions-grid">
+          <div class="suggestion-card" data-prompt="Plan a 5-day trip from London to Paris starting 2026-08-15 with a budget of 1500 EUR.">
+            <div class="card-header">
+              <i class="fa-solid fa-tower-observation"></i> London to Paris
+            </div>
+            <div class="card-desc">5-day trip, 1500 EUR budget, flights, hotels & itinerary.</div>
+          </div>
+
+          <div class="suggestion-card" data-prompt="Plan a 7-day trip from New York to Tokyo starting 2026-09-01 with a budget of 3000 USD.">
+            <div class="card-header">
+              <i class="fa-solid fa-torii-gate"></i> New York to Tokyo
+            </div>
+            <div class="card-desc">7-day discovery trip, $3000 USD budget, top sights & dining.</div>
+          </div>
+
+          <div class="suggestion-card" data-prompt="Plan a 4-day trip from Sydney to Bali starting 2026-09-10 with a budget of 2000 AUD.">
+            <div class="card-header">
+              <i class="fa-solid fa-umbrella-beach"></i> Sydney to Bali
+            </div>
+            <div class="card-desc">4-day tropical vacation, beachside resorts & guide.</div>
+          </div>
+
+          <div class="suggestion-card" data-prompt="Plan a 3-day trip from Frankfurt to Rome starting 2026-08-20 with a budget of 800 EUR.">
+            <div class="card-header">
+              <i class="fa-solid fa-monument"></i> Frankfurt to Rome
+            </div>
+            <div class="card-desc">3-day historic weekend, authentic food & highlights.</div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+
+    <!-- Pure Chat Input Footer -->
+    <footer class="chat-footer">
+      <form id="chat-form" class="chat-input-form">
+        <input id="user-input" type="text" placeholder="Type your travel plans (e.g., 'Plan a 5-day trip from London to Paris with 1500 EUR budget')..." autocomplete="off" required />
+        <button type="submit" class="btn-send" title="Send Message">
+          <i class="fa-solid fa-paper-plane"></i>
+        </button>
+      </form>
+    </footer>
+
+  </div>
+
+  <script>
+    const chatMessages = document.getElementById('chat-messages');
+    const welcomeScreen = document.getElementById('welcome-screen');
+    const chatForm = document.getElementById('chat-form');
+    const userInput = document.getElementById('user-input');
+    const btnNewChat = document.getElementById('btn-new-chat');
+
+    // New Chat / Clear Screen
+    btnNewChat.addEventListener('click', async () => {
+      chatMessages.innerHTML = '';
+      chatMessages.appendChild(welcomeScreen);
+      welcomeScreen.style.display = 'block';
+      userInput.value = '';
+      try {
+        await fetch('/clear?user_id=browser-user', { method: 'POST' });
+      } catch (err) {
+        console.error('Failed to clear chat session:', err);
+      }
+    });
+
+    // Suggestion Card Clicks
+    document.querySelectorAll('.suggestion-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const promptText = card.getAttribute('data-prompt');
+        submitQuery(promptText);
+      });
+    });
+
+    // Append Message to Thread
+    function appendMessage(role, contentHtml) {
+      if (welcomeScreen.style.display !== 'none') {
+        welcomeScreen.style.display = 'none';
+      }
+
+      const wrapper = document.createElement('div');
+      wrapper.className = `message-wrapper ${role}`;
+
+      const avatarIcon = role === 'user' ? '<i class="fa-solid fa-user"></i>' : '<i class="fa-solid fa-wand-magic-sparkles"></i>';
+      wrapper.innerHTML = `
+        <div class="message-avatar">${avatarIcon}</div>
+        <div class="bubble">${contentHtml}</div>
+      `;
+
+      chatMessages.appendChild(wrapper);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      return wrapper;
+    }
+
+    // Submit Query function
+    async function submitQuery(queryText) {
+      const query = queryText || userInput.value.trim();
+      if (!query) return;
+
+      userInput.value = '';
+
+      // Append User Bubble
+      appendMessage('user', `<p>${escapeHtml(query)}</p>`);
+
+      // Append Loading Bubble
+      const loadingMessage = appendMessage('assistant', `
+        <div class="loading-box">
+          <div class="dots-pulse">
+            <span></span><span></span><span></span>
+          </div>
+          <span>Searching flights, hotels, weather & generating your itinerary...</span>
+        </div>
+      `);
+
+      try {
+        const response = await fetch('/chat?user_id=browser-user', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: query })
+        });
+
+        const data = await response.json();
+        chatMessages.removeChild(loadingMessage);
+
+        const parsedMarkdown = marked.parse(data.itinerary || 'No itinerary generated.');
+        appendMessage('assistant', `<div class="llm-content">${parsedMarkdown}</div>`);
+
+      } catch (err) {
+        chatMessages.removeChild(loadingMessage);
+        appendMessage('assistant', `
+          <div style="color: #F87171;">
+            <i class="fa-solid fa-circle-exclamation"></i>
+            <strong> Error:</strong> ${escapeHtml(err.message)}
+          </div>
+        `);
+      }
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.innerText = text;
+      return div.innerHTML;
+    }
+
+    chatForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      submitQuery();
+    });
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,20 @@
+version: "3.8"
+services:
+  ai_travel_planner:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "9001:8000" # Host 9001 -> container 8000 to avoid Portainer using 9000
+    environment:
+      - PYTHONUNBUFFERED=1
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./:/app
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
