@@ -1,12 +1,12 @@
 from pathlib import Path
 from typing import List, Optional
-import re
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from langgraph.errors import GraphInterrupt
 
 from app.graph.runner import run_travel_graph
 from app.services.chat_store import chat_store
@@ -84,88 +84,83 @@ class ChatMessageRequest(BaseModel):
     preferences: Optional[TravelPreferences] = None
 
 
+
 def parse_travel_prompt(message: str, default_prefs: Optional[TravelPreferences] = None) -> TravelPreferences:
-    origin = default_prefs.origin if default_prefs and default_prefs.origin else None
-    destination = default_prefs.destination if default_prefs and default_prefs.destination else None
-    budget = default_prefs.budget if default_prefs and default_prefs.budget else None
-    currency = default_prefs.currency if default_prefs and default_prefs.currency else None
-    start_date = default_prefs.start_date if default_prefs and default_prefs.start_date else None
-    end_date = default_prefs.end_date if default_prefs and default_prefs.end_date else None
-    persons = default_prefs.persons if default_prefs and default_prefs.persons else "1"
+    import os, json as _json
+    from pathlib import Path as _Path
+    from langchain_openai import ChatOpenAI
 
-    msg = message.strip()
+    today = datetime.now()
 
-    # Extract origin (e.g., "from London", "from New York")
-    origin_match = re.search(r'\bfrom\s+([A-Za-z\s]+?)(?=\s+to|\s+starting|\s+for|\s+with|\s+budget|\,|\.|$)', msg, re.IGNORECASE)
-    if origin_match and origin_match.group(1).strip().lower() not in ["the", "a", "my"]:
-        origin = origin_match.group(1).strip()
+    api_key = os.getenv("GROK_API_CLOUD_KEY", "").strip().strip('"').strip("'")
+    if not api_key:
+        env_path = _Path(__file__).resolve().parent.parent / ".env"
+        if env_path.exists():
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                if "=" in line and line.split("=", 1)[0].strip() == "GROK_API_CLOUD_KEY":
+                    api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
 
-    # Extract destination (e.g., "to Paris", "to Tokyo")
-    dest_match = re.search(r'\bto\s+([A-Za-z\s]+?)(?=\s+from|\s+starting|\s+for|\s+with|\s+budget|\,|\.|$)', msg, re.IGNORECASE)
-    if dest_match and dest_match.group(1).strip().lower() not in ["the", "a", "my"]:
-        destination = dest_match.group(1).strip()
+    # Extract ONLY what's explicitly in the current message — no defaults seeded
+    extracted: dict = {}
+    if api_key:
+        llm = ChatOpenAI(
+            model="llama-3.1-8b-instant",
+            api_key=api_key,
+            base_url="https://api.groq.com/openai/v1",
+            temperature=0,
+            max_tokens=150,
+        )
+        prompt = (
+            f"Today is {today.strftime('%Y-%m-%d')}. "
+            "Extract travel details from the message below. "
+            "Reply with ONLY a JSON object with these keys: "
+            "origin, destination, budget (number only, no symbol), "
+            "currency (3-letter code e.g. INR/USD/EUR), persons (number), "
+            "start_date (YYYY-MM-DD, the FIRST date mentioned), "
+            "end_date (YYYY-MM-DD, the SECOND date mentioned). "
+            "Rules: only extract what is explicitly stated in the message; "
+            "preserve exact order of dates as they appear; "
+            "if only one date is mentioned set only start_date or end_date based on context "
+            "(e.g. 'return date' or 'end date' means end_date); "
+            "for budget like '60k' return 60000; "
+            "use null for any field not mentioned.\n\nMessage: "
+            + message
+        )
+        try:
+            response = llm.invoke([{"role": "user", "content": prompt}])
+            text = response.content.strip()
+            s, e = text.find("{"), text.rfind("}") + 1
+            if s != -1 and e > s:
+                extracted = _json.loads(text[s:e])
+                print(f"[LLM extract] raw={extracted}")
+        except Exception as ex:
+            print(f"[LLM extract] failed: {ex}")
 
-    # Currency extraction
-    curr_match = re.search(r'(EUR|USD|GBP|INR|₹|€|\$|£)', msg, re.IGNORECASE)
-    if curr_match:
-        raw_c = curr_match.group(1).upper()
-        symbol_map = {"$": "USD", "€": "EUR", "£": "GBP", "₹": "INR"}
-        currency = symbol_map.get(raw_c, raw_c)
+    # Python fallback: extract persons if LLM missed it
+    import re
+    if extracted.get("persons") is None:
+        m = re.search(r'\b(\d+)\s*(?:person|people|travell?er|passenger|adult|pax)?s?\b'
+                      r'|\b(?:person|people|travell?er|passenger|adult|pax)s?\s+(\d+)\b',
+                      message, re.IGNORECASE)
+        if m:
+            extracted["persons"] = m.group(1) or m.group(2)
 
-    # Persons / Travelers extraction (e.g., "for 2 persons", "3 people", "1 traveler")
-    persons_match = re.search(r'\b(?:for\s+)?(\d+)\s*(?:person|persons|people|traveler|travelers|pax|adult|adults)\b', msg, re.IGNORECASE)
-    if persons_match:
-        persons = persons_match.group(1)
+    # Apply defaults for fields NOT found in current message
+    def _get(key: str, default):
+        val = extracted.get(key)
+        if val is not None and str(val).strip() not in ("", "null"):
+            return str(val).strip()
+        return default
 
-    # Budget extraction (e.g., "30k", "30K", "30000")
-    k_budget_match = re.search(r'\b(\d+)\s*k\b', msg, re.IGNORECASE)
-    if k_budget_match:
-        budget = str(int(k_budget_match.group(1)) * 1000)
-    else:
-        digit_matches = re.findall(r'\b\d{3,6}\b', msg)
-        if digit_matches:
-            non_year_digits = [d for d in digit_matches if not (d.startswith("202") or d.startswith("203"))]
-            if non_year_digits:
-                budget = non_year_digits[0]
-
-    # Date extraction (YYYY-MM-DD or 18 aug to 25 aug)
-    MONTHS = {
-        'jan': 1, 'january': 1, 'feb': 2, 'february': 2, 'mar': 3, 'march': 3,
-        'apr': 4, 'april': 4, 'may': 5, 'june': 6, 'jun': 6, 'july': 7, 'jul': 7,
-        'aug': 8, 'august': 8, 'sep': 9, 'september': 9, 'oct': 10, 'october': 10,
-        'nov': 11, 'november': 11, 'dec': 12, 'december': 12
-    }
-    dates = re.findall(r'\b\d{4}-\d{2}-\d{2}\b', msg)
-    if len(dates) >= 2:
-        start_date = dates[0]
-        end_date = dates[1]
-    elif len(dates) == 1:
-        start_date = dates[0]
-    else:
-        month_matches = re.findall(r'(\d{1,2})(?:st|nd|rd|th)?\s+([a-zA-Z]+)(?:\s+(\d{4}))?', msg, re.IGNORECASE)
-        parsed_dates = []
-        current_year = datetime.now().year
-        for day_str, month_str, year_str in month_matches:
-            m_lower = month_str.lower()
-            if m_lower in MONTHS:
-                m_num = MONTHS[m_lower]
-                d_num = int(day_str)
-                y_num = int(year_str) if year_str else current_year
-                parsed_dates.append(f"{y_num:04d}-{m_num:02d}-{d_num:02d}")
-        if len(parsed_dates) >= 2:
-            start_date = parsed_dates[0]
-            end_date = parsed_dates[1]
-        elif len(parsed_dates) == 1:
-            start_date = parsed_dates[0]
-
+    dp = default_prefs
     return TravelPreferences(
-        origin=origin,
-        destination=destination,
-        budget=str(budget) if budget else None,
-        currency=currency,
-        start_date=start_date,
-        end_date=end_date,
-        persons=persons,
+        origin      = _get("origin",      dp.origin      if dp else None),
+        destination = _get("destination", dp.destination if dp else None),
+        budget      = _get("budget",      dp.budget      if dp else None),
+        currency    = _get("currency",    dp.currency    if dp else None),
+        start_date  = _get("start_date",  dp.start_date  if dp else None),
+        end_date    = _get("end_date",    dp.end_date    if dp else None),
+        persons     = _get("persons",     dp.persons     if dp else "1") or "1",
     )
 
 
@@ -197,34 +192,139 @@ def create_app() -> FastAPI:
 
     @app.post("/chat", response_model=TravelResponse)
     def chat_trip(payload: ChatMessageRequest, user_id: str = "demo-user") -> TravelResponse:
-        # Load previous conversation history and preferences from InMemoryStore
-        existing_history = chat_store.get_history(user_id)
+        from datetime import date as _date
+        today = _date.today()
+
+        existing_history    = chat_store.get_history(user_id)
         existing_prefs_dict = chat_store.get_preferences(user_id)
-        existing_prefs_obj = TravelPreferences(**existing_prefs_dict) if existing_prefs_dict else payload.preferences
+        existing_prefs_obj  = TravelPreferences(**existing_prefs_dict) if existing_prefs_dict else payload.preferences
 
-        parsed_prefs = parse_travel_prompt(payload.message, existing_prefs_obj)
-        pref_dict = {k: v for k, v in parsed_prefs.model_dump().items() if v is not None}
-        pref_dict["user_message"] = payload.message
-
-        # Append new user message to session message list
         updated_messages = list(existing_history)
         updated_messages.append({"role": "user", "content": payload.message})
 
-        result = run_travel_graph(
-            user_id=user_id,
-            preferences=pref_dict,
-            messages=updated_messages,
-        )
+        def _save_and_return(msg: str, prefs: dict) -> TravelResponse:
+            updated_messages.append({"role": "assistant", "content": msg})
+            chat_store.save_session(user_id, updated_messages, prefs)
+            mp = TravelPreferences(**{k: v for k, v in prefs.items() if k in TravelPreferences.model_fields})
+            return TravelResponse(user_id=user_id, preferences=mp, itinerary=msg, flights=[], hotels=[], restaurants=[])
 
-        assistant_itinerary = result.get("itinerary", "No response available.")
+        def _to_date(d: Optional[str]):
+            if not d: return None
+            try: return datetime.strptime(d.strip(), "%Y-%m-%d").date()
+            except ValueError: return None
+
+        # ── 1. Parse & merge preferences ────────────────────────────────
+        parsed_prefs = parse_travel_prompt(payload.message, existing_prefs_obj)
+
+        # Validate LLM-extracted dates before merging
+        def _valid_iso(d: Optional[str]) -> bool:
+            if not d: return True
+            try:
+                datetime.strptime(d.strip(), "%Y-%m-%d")
+                return True
+            except ValueError:
+                return False
+
+        bad_dates = []
+        if not _valid_iso(parsed_prefs.start_date): bad_dates.append(f"**{parsed_prefs.start_date}** (departure)")
+        if not _valid_iso(parsed_prefs.end_date):   bad_dates.append(f"**{parsed_prefs.end_date}** (return)")
+        if bad_dates:
+            pref_dict = {k: v for k, v in existing_prefs_dict.items() if v is not None}
+            pref_dict["user_message"] = payload.message
+            return _save_and_return(
+                "⚠️ Invalid date(s): " + ", ".join(bad_dates) + ". Please enter real calendar dates.",
+                pref_dict
+            )
+
+        pref_dict = {k: v for k, v in existing_prefs_dict.items() if v is not None}
+        for k, v in parsed_prefs.model_dump().items():
+            if v is None:
+                continue
+            if k == "persons":
+                try:
+                    if int(v) < 1:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+            pref_dict[k] = v
+        pref_dict["user_message"] = payload.message
+
+        # Check date order after merge
+        rs, re_ = _to_date(pref_dict.get("start_date")), _to_date(pref_dict.get("end_date"))
+        if rs and re_ and re_ <= rs:
+            pref_dict.pop("end_date", None)
+            err = (f"⚠️ Return date **{re_.isoformat()}** must be after "
+                   f"departure date **{rs.isoformat()}**. "
+                   "Please enter a valid return date.")
+            return _save_and_return(err, pref_dict)
+
+        # ── 2. Past-date guard on merged prefs ───────────────────────────
+        def _is_past(d: Optional[str]) -> bool:
+            if not d: return False
+            try: return datetime.strptime(d.strip(), "%Y-%m-%d").date() < today
+            except ValueError: return False
+
+        past_labels = []
+        if _is_past(pref_dict.get("start_date")):
+            past_labels.append(f"departure date **{pref_dict.pop('start_date')}**")
+        if _is_past(pref_dict.get("end_date")):
+            past_labels.append(f"return date **{pref_dict.pop('end_date')}**")
+        if past_labels:
+            label = " and ".join(past_labels)
+            verb  = "is" if len(past_labels) == 1 else "are"
+            err   = (f"⚠️ The {label} {verb} in the past (today is **{today.isoformat()}**). "
+                     "Please enter future dates for your trip.")
+            return _save_and_return(err, pref_dict)
+
+        # ── 3. Completeness guard ──────────────────────────────────────
+        required = {
+            "origin":      "📍 Origin city",
+            "destination": "🏙️ Destination city",
+            "start_date":  "📅 Departure date (e.g. 18 Aug 2026)",
+            "end_date":    "📅 Return date (e.g. 25 Aug 2026)",
+            "budget":      "💰 Total budget (e.g. 60000 or 60k)",
+            "persons":     "👥 Number of travellers",
+        }
+        missing = [label for field, label in required.items() if not pref_dict.get(field)]
+        if missing:
+            collected = ", ".join(f"{f}={pref_dict[f]}" for f in required if pref_dict.get(f))
+            ask_msg = (
+                "I need a few more details before I can build your itinerary:\n\n"
+                + "\n".join(f"  • {m}" for m in missing)
+                + (f"\n\n✅ Got so far: {collected}" if collected else "")
+            )
+            return _save_and_return(ask_msg, pref_dict)
+
+        # ── 4. Run the graph ────────────────────────────────────────────
+        result = {}
+        try:
+            result = run_travel_graph(user_id=user_id, preferences=pref_dict, messages=updated_messages)
+            assistant_itinerary = result.get("itinerary") or ""
+        except GraphInterrupt as exc:
+            assistant_itinerary = ""
+            try:
+                interrupts = exc.args[0]
+                if interrupts:
+                    val = getattr(interrupts[0], "value", None)
+                    if val:
+                        assistant_itinerary = str(val)
+            except Exception:
+                pass
+            assistant_itinerary = assistant_itinerary or str(exc)
+            print(f"[GraphInterrupt] caught → {assistant_itinerary[:120]}")
+        except Exception as exc:
+            print(f"[Graph ERROR] {type(exc).__name__}: {exc}")
+            raise
+
+        if not assistant_itinerary:
+            assistant_itinerary = "I'm sorry, something went wrong. Please try again."
+
         updated_messages.append({"role": "assistant", "content": assistant_itinerary})
-
-        # Persist updated session history and preferences in LangChain's InMemoryStore
         chat_store.save_session(user_id, updated_messages, pref_dict)
-
+        merged_prefs = TravelPreferences(**{k: v for k, v in pref_dict.items() if k in TravelPreferences.model_fields})
         return TravelResponse(
             user_id=user_id,
-            preferences=parsed_prefs,
+            preferences=merged_prefs,
             itinerary=assistant_itinerary,
             flights=result.get("flights", []),
             hotels=result.get("hotels", []),

@@ -70,6 +70,7 @@ def extract_web_price(
     expected_name = " ".join(entity_name.lower().split())
     print(f"[DDG Price] Evaluating {len(web_details)} result(s) for: {entity_name or 'unspecified item'}")
     for detail in web_details:
+        print("detail =", detail)
         title = detail.get("title", "")
         snippet = detail.get("snippet", "")
         combined = f"{title} {snippet}".lower()
