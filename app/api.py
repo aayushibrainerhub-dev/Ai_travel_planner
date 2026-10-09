@@ -7,6 +7,9 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from langgraph.errors import GraphInterrupt
+import os, json as _json
+from pathlib import Path as _Path
+from langchain_openai import ChatOpenAI
 
 from app.graph.runner import run_travel_graph
 from app.services.chat_store import chat_store
@@ -86,9 +89,7 @@ class ChatMessageRequest(BaseModel):
 
 
 def parse_travel_prompt(message: str, default_prefs: Optional[TravelPreferences] = None) -> TravelPreferences:
-    import os, json as _json
-    from pathlib import Path as _Path
-    from langchain_openai import ChatOpenAI
+    
 
     today = datetime.now()
 

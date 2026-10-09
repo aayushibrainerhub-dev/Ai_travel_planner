@@ -5,11 +5,13 @@ from redis import Redis
 
 
 def get_redis_url() -> str:
+    print("called")
     return os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 
 def get_client() -> Redis:
     url = get_redis_url()
+    print("urrl--------------------", url)
     return Redis.from_url(url, decode_responses=False)
 
 
